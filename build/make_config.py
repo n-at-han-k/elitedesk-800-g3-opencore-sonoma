@@ -149,8 +149,8 @@ d["Kernel"]["Emulate"] = {"Cpuid1Data": b"", "Cpuid1Mask": b"",
 
 # ---------------- Misc ----------------
 boot = d["Misc"]["Boot"]
-boot.update(HideAuxiliary=True, PickerAttributes=17, PickerMode="Builtin",
-            PollAppleHotKeys=True, ShowPicker=True, Timeout=8,
+boot.update(HideAuxiliary=False, PickerAttributes=17, PickerMode="Builtin",
+            PollAppleHotKeys=True, ShowPicker=True, Timeout=0,
             TakeoffDelay=0, LauncherOption="Disabled", LauncherPath="Default")
 dbg = d["Misc"]["Debug"]
 dbg.update(AppleDebug=True, ApplePanic=True, DisableWatchDog=True,

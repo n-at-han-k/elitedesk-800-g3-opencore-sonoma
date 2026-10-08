@@ -121,6 +121,16 @@ Save and exit.
 4. Re-map USB with USBToolBox/USBMap on your own machine if any port misbehaves —
    `UTBMap.kext` here came from another unit of this model.
 
+## Gotcha: the picker hides macOS Recovery
+
+OpenCore flags **macOS Recovery entries as auxiliary**. With `Misc/Boot/HideAuxiliary`
+set to `true`, the picker will show only your other OS (Windows, say) and happily boot
+it — the recovery installer is there, just hidden. Press **Space** at the picker to
+reveal it, or leave `HideAuxiliary` as `false` (what this config does).
+
+The `OCB: Policy filter mode 0 - no blessed folder found` lines during scan are normal
+noise for volumes without a bootloader, not the cause.
+
 ## Known-unresolved on this hardware
 
 - **Sleep/wake** does not work (reported by every build of this model).
