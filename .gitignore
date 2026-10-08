@@ -1,0 +1,13 @@
+# Apple's macOS recovery image - not redistributable
+recovery-*/
+*.dmg
+*.chunklist
+
+# Upstream binaries, fetched by build/fetch-deps.sh
+work/
+EFI/
+*.zip
+*.tar.gz
+
+# Generated config containing real SMBIOS serials
+config.plist.local
