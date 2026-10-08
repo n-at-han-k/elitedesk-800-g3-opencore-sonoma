@@ -145,8 +145,15 @@ chmod +x postinstall.sh
 | `smbios` | Generates a fresh `Macmini8,1` serial/MLB/UUID/ROM with `macserial` and writes them in. |
 | `validate` | Runs `ocvalidate` against the internal `config.plist`. |
 
-Flags: `--from <path>` to point `install-efi` at a specific EFI folder, `--yes` to skip
-prompts, `--help` anywhere.
+Flags: `--from <path>` to point `install-efi` at a specific EFI folder, `--disk diskN`
+to skip disk auto-detection, `--debug` to show how the disk and ESP were resolved,
+`--yes` to skip prompts, `--help` anywhere.
+
+Disk detection resolves the volume at `/` through its APFS physical store to the parent
+whole disk, then finds that disk's EFI partition — it does not assume `disk0s1`. Each
+lookup tries the plist keypath first and falls back to parsing `diskutil`'s plain-text
+output, because the key names and labels differ across macOS versions. If it still gets
+it wrong, `--debug` shows each step and `--disk diskN` overrides it.
 
 Every mutating command backs up `config.plist` to `EFI/OC/config-backups/` first and
 prints the exact command to roll back. `smbios` and `validate` download `macserial` and

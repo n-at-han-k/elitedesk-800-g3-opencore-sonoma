@@ -8,6 +8,11 @@
 #   ./postinstall.sh smbios        # generate a fresh Macmini8,1 serial/MLB/UUID/ROM
 #   ./postinstall.sh validate      # ocvalidate the internal EFI's config.plist
 #
+# Flags: --from <path>  source EFI folder for install-efi
+#        --disk diskN   skip disk auto-detection (see: diskutil list)
+#        --debug        show how the disk/ESP was resolved
+#        --yes          skip confirmation prompts
+#
 # Mutating commands back up config.plist first and print how to roll back.
 # Your USB remains a working rescue disk throughout: if the machine stops booting,
 # boot the USB and pick the internal volume.
@@ -16,6 +21,8 @@ set -euo pipefail
 
 SRC_EFI=""            # --from <path to an EFI folder>
 ASSUME_YES=0          # --yes
+FORCE_DISK=""         # --disk diskN   (skip auto-detection)
+DEBUG=0               # --debug
 OC_VER="1.0.8"
 
 say()  { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -26,6 +33,7 @@ good() { printf '\033[32m  = %s\033[0m\n' "$*"; }
 die()  { printf '\033[31mERROR: %s\033[0m\n' "$*" >&2; exit 1; }
 # Print the header comment block (everything from line 2 up to the first non-comment).
 usage() { awk 'NR>1 { if ($0 !~ /^#/) exit; sub(/^# ?/,""); print }' "$0"; }
+have() { command -v "$1" >/dev/null 2>&1; }
 
 confirm() {
   [ "$ASSUME_YES" = 1 ] && return 0
@@ -36,28 +44,64 @@ confirm() {
 
 # ---------------------------------------------------------------- disk helpers
 
-plx() { plutil -extract "$1" raw - 2>/dev/null || true; }   # plutil -extract from stdin
+# diskutil/plutil vary across macOS versions, so read a value by plist keypath and
+# fall back to parsing the plain-text output. plutil -extract needs "-o -" to write
+# to stdout; without it the call fails and yields junk like "<stdin>".
+#   dval <device> <PlainTextLabel> <plistKeyPath>
+dval() {
+  local dev="$1" label="$2" kp="$3" v=""
+  v=$(diskutil info -plist "$dev" 2>/dev/null \
+      | plutil -extract "$kp" raw -o - - 2>/dev/null) || v=""
+  case "$v" in ""|"<stdin>"|*"could not extract"*) v="" ;; esac
+  if [ -z "$v" ]; then
+    v=$(diskutil info "$dev" 2>/dev/null \
+        | sed -n "s/^ *${label}[^:]*: *//p" | head -1 | sed 's/ *$//')
+  fi
+  printf '%s' "$v"
+}
+
+dbg() { [ "$DEBUG" = 1 ] && printf '\033[90m  . %s\033[0m\n' "$*" >&2 || true; }
 
 # Whole disk holding the running system, resolving APFS containers.
+# An APFS volume's own ParentWholeDisk is the *synthesised* disk, not the real one,
+# so the physical store has to be resolved first.
 boot_whole_disk() {
+  [ -n "$FORCE_DISK" ] && { printf '%s' "$FORCE_DISK"; return 0; }
   local vol store whole
-  vol=$(diskutil info -plist / | plx DeviceIdentifier)
-  [ -n "$vol" ] || die "could not identify the volume mounted at /"
-  store=$(diskutil info -plist "$vol" | plx APFSPhysicalStores.0.DeviceIdentifier)
+  vol=$(df / 2>/dev/null | awk 'NR==2{print $1}'); vol=${vol#/dev/}
+  [ -n "$vol" ] || vol=$(dval / "Device Identifier" DeviceIdentifier)
+  dbg "volume at /        = ${vol:-<none>}"
+  [ -n "$vol" ] || die "could not identify the volume mounted at / (try --disk diskN)"
+
+  store=$(dval "$vol" "APFS Physical Store" APFSPhysicalStores.0.DeviceIdentifier)
+  dbg "APFS physical store = ${store:-<none>}"
   [ -n "$store" ] || store="$vol"
-  whole=$(diskutil info -plist "$store" | plx ParentWholeDisk)
-  [ -n "$whole" ] || die "could not resolve the physical disk behind /"
+
+  whole=$(dval "$store" "Part of Whole" ParentWholeDisk)
+  dbg "parent whole disk   = ${whole:-<none>}"
+  case "$whole" in
+    disk[0-9]*) ;;
+    *) die "could not resolve the physical disk behind / (got '${whole:-empty}' from '$store').
+       Run with --debug to see the steps, or pass --disk diskN explicitly.
+       'diskutil list' will show which disk holds your macOS volume." ;;
+  esac
   printf '%s' "$whole"
 }
 
 # The EFI System Partition on that disk.
 esp_of() {
-  local whole="$1" i cand content
+  local whole="$1" esp="" i cand content
+  # Primary: the partition table listing names the ESP in column 2.
+  esp=$(diskutil list "$whole" 2>/dev/null \
+        | awk '$2=="EFI" {print $NF; exit}')
+  case "$esp" in disk[0-9]*) dbg "ESP via diskutil list = $esp"; printf '%s' "$esp"; return 0 ;; esac
+  # Fallback: probe each partition's content type.
   for i in 1 2 3 4 5 6 7 8 9; do
     cand="${whole}s${i}"
     diskutil info "$cand" >/dev/null 2>&1 || continue
-    content=$(diskutil info -plist "$cand" | plx Content)
-    if [ "$content" = "EFI" ]; then printf '%s' "$cand"; return 0; fi
+    content=$(dval "$cand" "Content" Content)
+    dbg "probe $cand content = ${content:-<none>}"
+    [ "$content" = "EFI" ] && { printf '%s' "$cand"; return 0; }
   done
   return 1
 }
@@ -67,14 +111,15 @@ ESP_WAS_MOUNTED=0
 mount_esp() {
   local whole esp mp
   whole=$(boot_whole_disk)
-  esp=$(esp_of "$whole") || die "no EFI partition found on /dev/$whole"
-  mp=$(diskutil info -plist "$esp" | plx MountPoint)
+  esp=$(esp_of "$whole") || die "no EFI partition found on /dev/$whole.
+       Check 'diskutil list $whole' shows an EFI partition; --debug shows the probe."
+  mp=$(dval "$esp" "Mount Point" MountPoint)
   if [ -n "$mp" ]; then
     ESP_MNT="$mp"; ESP_WAS_MOUNTED=1
   else
     say "Mounting the internal EFI partition ($esp) - this needs sudo"
     sudo diskutil mount "$esp" >/dev/null || die "could not mount $esp"
-    mp=$(diskutil info -plist "$esp" | plx MountPoint)
+    mp=$(dval "$esp" "Mount Point" MountPoint)
     [ -n "$mp" ] || die "$esp mounted but has no mount point"
     ESP_MNT="$mp"
   fi
@@ -122,6 +167,9 @@ BOOT_GUID="7C436110-AB2A-4BBB-A880-FE41995C9F82"
 # ---------------------------------------------------------------------- status
 
 cmd_status() {
+  # A read-only report must degrade gracefully rather than abort on the first
+  # tool that is missing or exits non-zero, so errexit/pipefail are off here.
+  set +e +o pipefail
   say "== Machine"
   info "$(sysctl -n machdep.cpu.brand_string)"
   info "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
@@ -163,7 +211,7 @@ cmd_status() {
   fi
 
   say "== Network"
-  networksetup -listallhardwareports 2>/dev/null \
+  have networksetup && networksetup -listallhardwareports 2>/dev/null \
     | awk '/Hardware Port/{p=$3" "$4} /Device/{print "  "p" -> "$2}' | head -6
   if ifconfig en0 >/dev/null 2>&1 && ifconfig en0 | grep -q 'status: active'; then
     good "en0 is up (IntelMausi working)"
@@ -172,7 +220,7 @@ cmd_status() {
   fi
 
   say "== Security / SMBIOS"
-  info "SIP: $(csrutil status 2>/dev/null | sed 's/^System Integrity Protection status: //')"
+  info "SIP: $(csrutil status 2>/dev/null | sed 's/^System Integrity Protection status: //' || echo unknown)"
   local serial
   serial=$(system_profiler SPHardwareDataType 2>/dev/null | awk -F': ' '/Serial Number/{print $2}')
   info "serial: ${serial:-unknown}"
@@ -184,7 +232,7 @@ cmd_status() {
   fi
 
   say "== Sleep (known broken on this hardware)"
-  info "hibernatemode: $(pmset -g | awk '/hibernatemode/{print $2}')"
+  have pmset && info "hibernatemode: $(pmset -g 2>/dev/null | awk '/hibernatemode/{print $2}')"
   info "Sleep/wake does not work on the 800 G3. Consider: sudo pmset -a sleep 0 disablesleep 1"
 
   say "== Boot disk"
@@ -192,7 +240,7 @@ cmd_status() {
   whole=$(boot_whole_disk); esp=$(esp_of "$whole" || true)
   info "system disk: /dev/$whole   ESP: ${esp:-none found}"
   if [ -n "${esp:-}" ]; then
-    local mp; mp=$(diskutil info -plist "$esp" | plx MountPoint)
+    local mp; mp=$(dval "$esp" "Mount Point" MountPoint)
     if [ -n "$mp" ] && [ -d "$mp/EFI/OC" ]; then
       good "OpenCore is installed on the internal disk"
     else
@@ -328,6 +376,8 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --from) SRC_EFI="${2:-}"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; shift ;;
+    --disk) FORCE_DISK="${2:-}"; shift 2 ;;
+    --debug) DEBUG=1; shift ;;
     -h|--help) usage; exit 0 ;;
     status|install-efi|enable-gpu|smbios|validate) CMD="$1"; shift ;;
     *) die "unknown argument: $1  (try --help)" ;;
