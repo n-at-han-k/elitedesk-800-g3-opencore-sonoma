@@ -3,12 +3,16 @@
 A reproducible OpenCore build for the HP EliteDesk 800 G3 Desktop Mini, assembled
 **from Linux** — no existing Mac required.
 
+**Status:** installer boots and proceeds to install on the hardware below. Hardware
+details were read back from an OpenCore DEBUG log on the machine itself, not from the
+spec sheet.
+
 Target hardware:
 
 | | |
 |---|---|
 | Model | HP EliteDesk 800 G3 DM |
-| CPU | Intel Core i5-6500 (Skylake) |
+| CPU | Intel Core i5-6500T (Skylake, 35 W) |
 | iGPU | Intel HD Graphics 530 |
 | Chipset | Q270 |
 | Ethernet | Intel I219-LM |
@@ -77,7 +81,7 @@ you to type `ERASE`. Check the target anyway.
 | `SSDT-AWAC-HPET-RTC` | enabled | HP RTC/HPET fix. Required. |
 | `SSDT-EC-USBX` | enabled | Embedded controller + USB power, Skylake desktop. |
 | `SSDT-PLUG` | enabled | Native CPU power management (XCPM plugin-type 1). |
-| `AppleCpuPmCfgLock`, `AppleXcpmCfgLock` | true | HP BIOS exposes no CFG-Lock toggle. |
+| `AppleCpuPmCfgLock`, `AppleXcpmCfgLock` | true | HP BIOS exposes no CFG-Lock toggle. Confirmed necessary: OpenCore reports `OCCPU: EIST CFG Lock 1` on this board. |
 | `DisableIoMapper` | true | VT-d is turned off in BIOS. |
 | `LapicKernelPanic` | true | HP firmware raises spurious LAPIC interrupts. |
 | `XhciPortLimit` | **false** | Broken on 11.3+ (boot loops). Unnecessary — `UTBMap` maps the ports. |
@@ -130,6 +134,13 @@ reveal it, or leave `HideAuxiliary` as `false` (what this config does).
 
 The `OCB: Policy filter mode 0 - no blessed folder found` lines during scan are normal
 noise for volumes without a bootloader, not the cause.
+
+Be aware when debugging this from a log: OpenCore logs `OCB: Not adding hidden auxiliary
+entry ...` for **tools and system entries** (OpenShell, Reset NVRAM) but logs *nothing*
+for a filesystem recovery entry it hides. A DEBUG log with no mention of `recovery`,
+`dmg` or `BaseSystem` anywhere is therefore consistent with `HideAuxiliary` being the
+cause, not evidence against it. `HideAuxiliary` is documented in `Docs/Configuration.tex`
+as covering "Entry is macOS recovery".
 
 ## Known-unresolved on this hardware
 
