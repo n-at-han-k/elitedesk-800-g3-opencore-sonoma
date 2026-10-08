@@ -132,6 +132,9 @@ for k in kq:
         kq[k] = False
 for k in ("AppleCpuPmCfgLock",        # HP BIOS has no CFG-Lock toggle
           "AppleXcpmCfgLock",         # ditto
+          "DisableRtcChecksum",       # HP POSTs "system time is invalid" without this:
+                                      # stops AppleRTC writing the CMOS primary
+                                      # checksum at 0x58-0x59
           "DisableIoMapper",          # VT-d is off / not macOS friendly
           "DisableLinkeditJettison",  # Lilu, always on for 11+
           "LapicKernelPanic",         # HP firmware sends spurious LAPIC interrupts

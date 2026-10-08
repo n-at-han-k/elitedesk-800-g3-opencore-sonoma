@@ -83,6 +83,7 @@ you to type `ERASE`. Check the target anyway.
 | `SSDT-PLUG` | enabled | Native CPU power management (XCPM plugin-type 1). |
 | `AppleCpuPmCfgLock`, `AppleXcpmCfgLock` | true | HP BIOS exposes no CFG-Lock toggle. Confirmed necessary: OpenCore reports `OCCPU: EIST CFG Lock 1` on this board. |
 | `DisableIoMapper` | true | VT-d is turned off in BIOS. |
+| `DisableRtcChecksum` | true | **Required on this machine.** Without it macOS corrupts the CMOS primary checksum and HP POSTs `system time is invalid` on every subsequent boot. |
 | `LapicKernelPanic` | true | HP firmware raises spurious LAPIC interrupts. |
 | `XhciPortLimit` | **false** | Broken on 11.3+ (boot loops). Unnecessary — `UTBMap` maps the ports. |
 | `SecureBootModel` | `Disabled` | Required with a spoofed iGPU. |
@@ -177,6 +178,11 @@ as covering "Entry is macOS recovery".
 
 ## Known-unresolved on this hardware
 
+- If HP POSTs **`system time is invalid`** after a macOS boot, `DisableRtcChecksum`
+  is not set. It is set in this config. If it recurs even so, macOS is writing to CMOS
+  outside `0x58`-`0x59`; add [RTCMemoryFixup](https://github.com/acidanthera/RTCMemoryFixup)
+  and populate the `rtc-blacklist` NVRAM variable (already present, empty) with the
+  offending offsets.
 - **Sleep/wake** does not work (reported by every build of this model).
 - **Shutdown may not fully power off** (fan keeps spinning) — HP's ACPI.
 - Some people need to **unplug/replug DisplayPort once** after boot to get a signal.
