@@ -7,6 +7,7 @@
 #   ./postinstall.sh enable-gpu    # drop -igfxvesa so the iGPU accelerates
 #   ./postinstall.sh smbios        # generate a fresh Macmini8,1 serial/MLB/UUID/ROM
 #   ./postinstall.sh validate      # ocvalidate the internal EFI's config.plist
+#   ./postinstall.sh fix-rtc       # stop HP POSTing "system time is invalid"
 #
 # Flags: --from <path>  source EFI folder for install-efi
 #        --disk diskN   skip disk auto-detection (see: diskutil list)
@@ -231,6 +232,16 @@ cmd_status() {
     info "if Apple recognises it, someone else owns it - run '$0 smbios' for a new one"
   fi
 
+  say "== RTC / CMOS"
+  local rtccfg rtcq=""
+  for rtccfg in /Volumes/EFI/EFI/OC/config.plist /Volumes/OPENCORE/EFI/OC/config.plist; do
+    [ -f "$rtccfg" ] || continue
+    rtcq=$(plutil -extract Kernel.Quirks.DisableRtcChecksum raw -o - "$rtccfg" 2>/dev/null)
+    info "$rtccfg -> DisableRtcChecksum = ${rtcq:-unknown}"
+    [ "$rtcq" = "true" ] || bad "not set here: HP will POST 'system time is invalid'"
+  done
+  [ -n "$rtcq" ] || info "(no mounted ESP to check; run 'fix-rtc' to patch the internal one)"
+
   say "== Sleep (known broken on this hardware)"
   have pmset && info "hibernatemode: $(pmset -g 2>/dev/null | awk '/hibernatemode/{print $2}')"
   info "Sleep/wake does not work on the 800 G3. Consider: sudo pmset -a sleep 0 disablesleep 1"
@@ -359,6 +370,40 @@ cmd_smbios() {
   info "Sign out of iCloud/iMessage BEFORE changing a serial you have already used."
 }
 
+# --------------------------------------------------------------------- fix-rtc
+
+cmd_fix_rtc() {
+  mount_esp; trap unmount_esp EXIT
+  local cfg cur; cfg=$(internal_config)
+  cur=$(plutil -extract Kernel.Quirks.DisableRtcChecksum raw -o - "$cfg" 2>/dev/null || echo "?")
+  say "Setting Kernel -> Quirks -> DisableRtcChecksum = true"
+  info "config:  $cfg"
+  info "current: $cur"
+  if [ "$cur" = "true" ]; then good "already set; nothing to do"; return 0; fi
+  info "Stops AppleRTC writing the CMOS primary checksum at 0x58-0x59, which is what"
+  info "makes this HP POST \"system time is invalid\" after every macOS boot."
+  confirm "Apply?"
+  backup_config "$cfg"
+  sudo plutil -replace Kernel.Quirks.DisableRtcChecksum -bool true "$cfg"
+  sudo plutil -convert xml1 "$cfg"
+  local now; now=$(plutil -extract Kernel.Quirks.DisableRtcChecksum raw -o - "$cfg" 2>/dev/null || echo "?")
+  [ "$now" = "true" ] || die "write did not take effect (reads back as '$now')"
+  good "DisableRtcChecksum is now true"
+  say "Also patch the USB, if it is plugged in"
+  local u
+  for u in /Volumes/OPENCORE/EFI/OC/config.plist /Volumes/EFI/EFI/OC/config.plist; do
+    if [ -f "$u" ]; then
+      sudo plutil -replace Kernel.Quirks.DisableRtcChecksum -bool true "$u" \
+        && sudo plutil -convert xml1 "$u" && good "patched $u"
+    fi
+  done
+  say "Next"
+  info "1. Set the correct date/time in BIOS (F10) one last time."
+  info "2. Reboot. Quirks are read from config.plist each boot - no NVRAM reset needed."
+  info "3. The POST error should not come back. If it does, tell me: macOS is writing"
+  info "   CMOS outside 0x58-0x59 and RTCMemoryFixup is the next step."
+}
+
 # -------------------------------------------------------------------- validate
 
 cmd_validate() {
@@ -379,7 +424,7 @@ while [ $# -gt 0 ]; do
     --disk) FORCE_DISK="${2:-}"; shift 2 ;;
     --debug) DEBUG=1; shift ;;
     -h|--help) usage; exit 0 ;;
-    status|install-efi|enable-gpu|smbios|validate) CMD="$1"; shift ;;
+    status|install-efi|enable-gpu|smbios|validate|fix-rtc) CMD="$1"; shift ;;
     *) die "unknown argument: $1  (try --help)" ;;
   esac
 done
@@ -396,4 +441,5 @@ case "$CMD" in
   enable-gpu)  cmd_enable_gpu ;;
   smbios)      cmd_smbios ;;
   validate)    cmd_validate ;;
+  fix-rtc)     cmd_fix_rtc ;;
 esac
