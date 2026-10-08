@@ -125,6 +125,39 @@ Save and exit.
 4. Re-map USB with USBToolBox/USBMap on your own machine if any port misbehaves —
    `UTBMap.kext` here came from another unit of this model.
 
+## After install: postinstall.sh
+
+Run this **on the EliteDesk**, once macOS is up. One file, no dependencies beyond what
+macOS ships:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/n-at-han-k/elitedesk-800-g3-opencore-sonoma/main/postinstall.sh
+chmod +x postinstall.sh
+./postinstall.sh status          # read-only report - start here
+```
+
+| Command | What it does |
+|---|---|
+| `status` | Reports iGPU acceleration (Metal present? VRAM reading ~7 MB?), current `boot-args`, audio devices, ethernet, SIP, serial, sleep settings, and whether OpenCore is on the internal disk. Changes nothing. |
+| `install-efi` | Finds the internal disk's EFI partition, mounts it, copies the `EFI` folder from the USB, and verifies the copy with `diff -r`. Any existing `EFI` is moved aside, not deleted. |
+| `enable-gpu` | Strips `-igfxvesa` from `boot-args` so the iGPU accelerates. |
+| `smbios` | Generates a fresh `Macmini8,1` serial/MLB/UUID/ROM with `macserial` and writes them in. |
+| `validate` | Runs `ocvalidate` against the internal `config.plist`. |
+
+Flags: `--from <path>` to point `install-efi` at a specific EFI folder, `--yes` to skip
+prompts, `--help` anywhere.
+
+Every mutating command backs up `config.plist` to `EFI/OC/config-backups/` first and
+prints the exact command to roll back. `smbios` and `validate` download `macserial` and
+`ocvalidate` from the official OpenCorePkg release at run time; nothing else needs network.
+
+**Keep the USB.** It stays a working rescue disk — if the machine won't boot after any of
+this, boot the USB and pick the internal volume from the picker.
+
+Order that makes sense: `status` → `install-efi` → `smbios` → `enable-gpu` → `validate`
+→ reboot without the USB. Reset NVRAM from the OpenCore picker after `smbios` or
+`enable-gpu`, since `boot-args` and the serial are read from NVRAM.
+
 ## Gotcha: the picker hides macOS Recovery
 
 OpenCore flags **macOS Recovery entries as auxiliary**. With `Misc/Boot/HideAuxiliary`
